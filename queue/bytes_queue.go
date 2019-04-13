@@ -24,6 +24,12 @@ var (
 
 // BytesQueue is a non-thread safe queue type of fifo based on bytes array.
 // For every push operation index of entry is returned. It can be used to read the entry later
+// 如果想要看懂它的工作原理，只需要考虑如下几个情况：
+// 1. 假设容量无限，增加 entry：q.head 固定，q.tail 向右移动
+// 2. 假设容量有限，最终 q.tail 会到达最大位置处，此时 rightMargin 也是在最大位置处
+// 3. 假设此时已经满了，开始 pop：q.head 会逐渐向右移动，直到和 rightMargin 相遇，此时整个队列为空，自然可以这样：
+//      1. q.tail = leftMargin
+//      2. q.head = leftMargin
 type BytesQueue struct {
 	array           []byte
 	capacity        int
@@ -72,6 +78,8 @@ func (q *BytesQueue) Reset() {
 func (q *BytesQueue) Push(data []byte) (int, error) {
 	dataLen := len(data)
 
+	// 也就是开辟的内存到最大值后，随着 q.head 的转移，有可能会出现 q.head 追上 q.tail 的情况
+	// 这时候新增的记录就可能插入到 []byte 左侧空闲部分了
 	if q.availableSpaceAfterTail() < dataLen+headerEntrySize {
 		if q.availableSpaceBeforeHead() >= dataLen+headerEntrySize {
 			q.tail = leftMarginIndex
@@ -119,6 +127,7 @@ func (q *BytesQueue) allocateAdditionalMemory(minimum int) {
 }
 
 func (q *BytesQueue) push(data []byte, len int) {
+	// 把长度信息记下来，然后，计入实际的数据
 	binary.LittleEndian.PutUint32(q.headerBuffer, uint32(len))
 	q.copy(q.headerBuffer, headerEntrySize)
 

@@ -58,6 +58,7 @@ func newBigCache(config Config, clock clock) (*BigCache, error) {
 		hash:         config.Hasher,
 		config:       config,
 		shardMask:    uint64(config.Shards - 1),
+		// 每个 shard 最大的尺寸（MaxCacheSize / shards）
 		maxShardSize: uint32(config.maximumShardSize()),
 		close:        make(chan struct{}),
 	}
@@ -72,6 +73,7 @@ func newBigCache(config Config, clock clock) (*BigCache, error) {
 	}
 
 	for i := 0; i < config.Shards; i++ {
+		// 注册事件回调
 		cache.shards[i] = initNewShard(config, onRemove, clock)
 	}
 
@@ -105,8 +107,11 @@ func (c *BigCache) Close() error {
 // It returns an ErrEntryNotFound when
 // no entry exists for the given key.
 func (c *BigCache) Get(key string) ([]byte, error) {
+	// 计算 hash 后的 key
 	hashedKey := c.hash.Sum64(key)
+	// 根据 key 确定在哪个 shard
 	shard := c.getShard(hashedKey)
+	// 从具体的 shard 获取对应的值
 	return shard.get(key, hashedKey)
 }
 
@@ -134,11 +139,12 @@ func (c *BigCache) Reset() error {
 
 // Len computes number of entries in cache
 func (c *BigCache) Len() int {
-	var len int
+	// 这个计算是 goroutine 安全的，`shard.len()` 用了 读写锁
+	var length int
 	for _, shard := range c.shards {
-		len += shard.len()
+		length += shard.len()
 	}
-	return len
+	return length
 }
 
 // Capacity returns amount of bytes store in the cache.

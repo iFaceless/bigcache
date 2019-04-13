@@ -11,9 +11,13 @@ import (
 type onRemoveCallback func(wrappedEntry []byte, reason RemoveReason)
 
 type cacheShard struct {
+	// key 存储 hash 后的 key
+	// value 存储 entry 的偏移
 	hashmap     map[uint64]uint32
+	// 所有的 entry 是放在 FIFO 队列中
 	entries     queue.BytesQueue
 	lock        sync.RWMutex
+	// 存放 entry 的具体内容
 	entryBuffer []byte
 	onRemove    onRemoveCallback
 
@@ -35,12 +39,14 @@ func (s *cacheShard) get(key string, hashedKey uint64) ([]byte, error) {
 		return nil, ErrEntryNotFound
 	}
 
+	// 从 queue 的指定位置查看有没有这个 entry
 	wrappedEntry, err := s.entries.Get(int(itemIndex))
 	if err != nil {
 		s.lock.RUnlock()
 		s.miss()
 		return nil, err
 	}
+	// 找到 entry 后看，key 的内容是否不同，如果不同，表明 hash 冲突了
 	if entryKey := readKeyFromEntry(wrappedEntry); key != entryKey {
 		if s.isVerbose {
 			s.logger.Printf("Collision detected. Both %q and %q have the same hash %x", key, entryKey, hashedKey)
@@ -49,6 +55,7 @@ func (s *cacheShard) get(key string, hashedKey uint64) ([]byte, error) {
 		s.collision()
 		return nil, ErrEntryNotFound
 	}
+	// 把整个 entry 读取出来
 	entry := readEntry(wrappedEntry)
 	s.lock.RUnlock()
 	s.hit()
@@ -61,15 +68,19 @@ func (s *cacheShard) set(key string, hashedKey uint64, entry []byte) error {
 	s.lock.Lock()
 
 	if previousIndex := s.hashmap[hashedKey]; previousIndex != 0 {
+		// 看相同的位置是否有 entry 存在了
 		if previousEntry, err := s.entries.Get(int(previousIndex)); err == nil {
+			// 清空这个 entry，准备换新的
 			resetKeyFromEntry(previousEntry)
 		}
 	}
 
+	// Additional: 检查队列头部（最旧）Entry 是否需要剔除了（过期）
 	if oldestEntry, err := s.entries.Peek(); err == nil {
 		s.onEvict(oldestEntry, currentTimestamp, s.removeOldestEntry)
 	}
 
+	// 将 kv 打包好
 	w := wrapEntry(currentTimestamp, hashedKey, key, entry, &s.entryBuffer)
 
 	for {
@@ -78,6 +89,7 @@ func (s *cacheShard) set(key string, hashedKey uint64, entry []byte) error {
 			s.lock.Unlock()
 			return nil
 		}
+		// 留出空间存放新的 Entry
 		if s.removeOldestEntry(NoSpace) != nil {
 			s.lock.Unlock()
 			return fmt.Errorf("entry is bigger than max shard size")
